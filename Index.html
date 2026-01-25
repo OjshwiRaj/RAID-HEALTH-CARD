@@ -1,0 +1,1687 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAID Health Card</title>
+    
+    <!-- PERFORMANCE: Pre-connect to critical CDNs -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://www.gstatic.com">
+    <link rel="preconnect" href="https://unpkg.com">
+
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .font-mono { font-family: 'JetBrains Mono', monospace; }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 0.5rem; }
+    </style>
+</head>
+<body class="bg-slate-50 text-slate-900">
+    <div id="root"></div>
+
+    <script type="text/babel" data-type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth, 
+            signInAnonymously, 
+            signInWithCustomToken,
+            onAuthStateChanged,
+            signOut
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            setDoc, 
+            getDoc,
+            collection,
+            onSnapshot,
+            query,
+            deleteDoc,
+            getDocs
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        /* ==========================================
+           CONFIGURATION & INIT
+           ==========================================
+        */
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyDgqrH_lT1q1mCMlxNNjCWVDuQcSWNSCWU",
+            authDomain: "raid-health-card.firebaseapp.com",
+            projectId: "raid-health-card",
+            storageBucket: "raid-health-card.firebasestorage.app",
+            messagingSenderId: "935067454733",
+            appId: "1:935067454733:web:f85d1b4b4136aee3a33444",
+            measurementId: "G-4JHE37RLL5"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'raid-health-card';
+        const geminiApiKey = "AIzaSyC_dE9OAUSdL0Fq3z7A47FNrOkuKn7sMtk"; 
+
+        /* ==========================================
+           SECURITY & ENCRYPTION UTILS
+           ==========================================
+        */
+        const hashID = async (text) => {
+            if (!text) return "";
+            try {
+                // Check if secure crypto is available
+                if (window.crypto && window.crypto.subtle) {
+                    const msgBuffer = new TextEncoder().encode(text.toString());
+                    const hashBuffer = await window.crypto.subtle.digest('SHA-256', msgBuffer);
+                    const hashArray = Array.from(new Uint8Array(hashBuffer));
+                    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 16);
+                } else {
+                    throw new Error("Crypto unavailable");
+                }
+            } catch (e) {
+                // Robust Fallback hash
+                let hash = 0, i, chr;
+                const str = text.toString();
+                if (str.length === 0) return hash.toString();
+                for (i = 0; i < str.length; i++) {
+                    chr = str.charCodeAt(i);
+                    hash = ((hash << 5) - hash) + chr;
+                    hash |= 0; 
+                }
+                return Math.abs(hash).toString(16).padStart(16, '0');
+            }
+        };
+
+        const SECRET_KEY = "RAID_SECURE_KEY_v1";
+        
+        const encryptData = (text) => {
+            if (!text) return "";
+            try {
+                let result = "";
+                for (let i = 0; i < text.length; i++) {
+                    result += String.fromCharCode(text.charCodeAt(i) ^ SECRET_KEY.charCodeAt(i % SECRET_KEY.length));
+                }
+                return window.btoa(result);
+            } catch (e) { return text; }
+        };
+
+        const decryptData = (ciphertext) => {
+            if (!ciphertext) return "";
+            try {
+                const text = window.atob(ciphertext);
+                let result = "";
+                for (let i = 0; i < text.length; i++) {
+                    result += String.fromCharCode(text.charCodeAt(i) ^ SECRET_KEY.charCodeAt(i % SECRET_KEY.length));
+                }
+                return result;
+            } catch (e) { return ciphertext; }
+        };
+
+        const compressImage = (file, maxWidth = 600, quality = 0.5) => {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = (event) => {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        let width = img.width;
+                        let height = img.height;
+                        if (width > maxWidth) {
+                            height = (maxWidth / width) * height;
+                            width = maxWidth;
+                        }
+                        canvas.width = width;
+                        canvas.height = height;
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+                        resolve(canvas.toDataURL('image/jpeg', quality));
+                    };
+                };
+            });
+        };
+
+        /* ==========================================
+           GEMINI AI SERVICE
+           ==========================================
+        */
+        const callGemini = async (prompt, imageBase64 = null) => {
+            const parts = [{ text: prompt }];
+            if (imageBase64) {
+                const cleanBase64 = imageBase64.split(',')[1] || imageBase64;
+                parts.push({ inlineData: { mimeType: "image/jpeg", data: cleanBase64 } });
+            }
+
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${geminiApiKey}`;
+            const payload = { contents: [{ role: "user", parts: parts }] };
+            const delays = [1000, 2000, 4000];
+
+            for (let i = 0; i <= delays.length; i++) {
+                try {
+                    const response = await fetch(url, {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify(payload),
+                    });
+                    if (!response.ok) {
+                        if (i === delays.length) throw new Error(`Gemini API Error`);
+                        await new Promise(resolve => setTimeout(resolve, delays[i]));
+                        continue;
+                    }
+                    const data = await response.json();
+                    return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response generated.";
+                } catch (error) {
+                    if (i === delays.length) throw error;
+                    await new Promise(resolve => setTimeout(resolve, delays[i]));
+                }
+            }
+        };
+
+        const analyzePrescription = async (imageBase64) => {
+            const prompt = `
+            You are a helpful medical assistant. Analyze this prescription or medical report image.
+            Create a simple, easy-to-read summary for the patient. 
+            
+            Please use this clear format (do not use tables):
+            
+            **Doctor:** [Name]
+            **Date:** [Date]
+            
+            **💊 Medicines:**
+            • [Medicine Name] ([Dosage]) - [Instructions]
+            
+            **📝 Key Instructions/Findings:**
+            [Simple explanation of findings or advice]
+            
+            Keep the language simple and avoid complex medical jargon where possible.
+            `;
+            return await callGemini(prompt, imageBase64);
+        }
+
+        const generateMedicalSummary = async (patientData, mode = 'clinical') => {
+            const visitHistory = (patientData.visits || []).slice(0, 5).map(v => 
+                `- ${new Date(v.period?.start || v.date).toLocaleDateString()}: ${v.reasonCode?.[0]?.coding?.[0]?.display || v.diagnosis || 'Unknown'}`
+            ).join("\n");
+
+            let prompt;
+            // Enhanced Doctor Prompt for structured output
+            prompt = `
+            Role: Expert Clinical AI Assistant.
+            Task: Summarize patient history for a physician review.
+            
+            Patient: ${patientData.fullName}, ${patientData.age}y ${patientData.gender}, Blood: ${patientData.bloodType}.
+            Allergies: ${patientData.allergies || 'None'}.
+            Chronic Conditions: ${patientData.conditions || 'None'}.
+            Recent Visits (Last 5):
+            ${visitHistory || 'No recent history.'}
+            
+            Generate a structured summary using these headers:
+            
+            **⚠️ Critical Alerts**
+            (Highlight allergies or severe conditions)
+            
+            **📊 Clinical Snapshot**
+            (Brief summary of patient status and trajectory)
+            
+            **🔍 History Review**
+            (Key takeaways from recent visits)
+            
+            **📉 Risk Assessment**
+            (Low/Medium/High with short reason)
+            `;
+            
+            return await callGemini(prompt);
+        };
+
+        const generateHealthInsights = async (patientData) => {
+            return await callGemini(`Health Coach. Profile: ${patientData.age}yr ${patientData.gender}, Conditions: ${patientData.conditions}. 3 short lifestyle tips.`);
+        };
+
+        const checkSymptoms = async (patientData, symptoms) => {
+            return await callGemini(`Triage Assistant. Profile: ${patientData.age} ${patientData.gender}. Conditions: ${patientData.conditions}. Symptoms: "${symptoms}". Output: 1. Triage Level 2. Causes 3. Advice. Disclaimer: AI Estimate.`);
+        };
+
+        const suggestDifferentialDiagnosis = async (patientData, notes) => {
+            return await callGemini(`Clinical Decision Support. Patient: ${patientData.age}yo ${patientData.gender}. History: ${patientData.conditions}. Notes: "${notes}". Suggest 3 differential diagnoses. Format: "ICD-10 Code - Name"`);
+        };
+
+        // NEW: Generate Patient Instructions
+        const generateDischargeInstructions = async (patientData, diagnosis, notes) => {
+            const prompt = `
+            Act as a compassionate nurse.
+            Patient: ${patientData.age}yo.
+            Diagnosis: ${diagnosis}.
+            Doctor's Technical Notes: "${notes}".
+            
+            Write clear, simple Discharge Instructions for the patient.
+            Include:
+            1. What happened (simple explanation)
+            2. Home Care Instructions
+            3. Warning Signs (When to come back)
+            
+            Keep it concise and easy to read.
+            `;
+            return await callGemini(prompt);
+        };
+
+        // NEW: Chat with Health Bot
+        const chatWithHealthBot = async (history, patientProfile, userMessage) => {
+            const context = `
+            You are a helpful AI Health Assistant for a patient. 
+            Patient Profile: ${patientProfile.age}yr old ${patientProfile.gender}.
+            Conditions: ${patientProfile.conditions}.
+            Meds: ${patientProfile.activeMedications ? patientProfile.activeMedications.map(m=>m.name).join(', ') : 'None'}.
+            
+            Answer the user's health question safely and concisely. 
+            If it looks like a medical emergency, tell them to call emergency services immediately.
+            `;
+            
+            const conversation = history.map(h => `${h.role}: ${h.text}`).join('\n');
+            const fullPrompt = `${context}\n\nConversation So Far:\n${conversation}\nUser: ${userMessage}\nAI:`;
+            
+            return await callGemini(fullPrompt);
+        };
+
+        /* ==========================================
+           ICONS
+           ==========================================
+        */
+        const Icons = {
+            Activity: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>,
+            User: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>,
+            Stethoscope: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M4.8 2.3A.3.3 0 1 0 5 2H4a2 2 0 0 0-2 2v5a6 6 0 0 0 6 6v0a6 6 0 0 0 6-6V4a2 2 0 0 0-2-2h-1a.2.2 0 1 0 .3.3"/><path d="M8 15v1a6 6 0 0 0 6 6v0a6 6 0 0 0 6-6v-4"/><circle cx="20" cy="10" r="2"/></svg>,
+            ShieldAlert: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>,
+            Heart: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>,
+            FileText: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/></svg>,
+            ArrowLeft: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>,
+            Save: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>,
+            Search: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>,
+            Loader2: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={`animate-spin ${className}`}><path d="M21 12a9 9 0 1 1-6.219-2.87"/></svg>,
+            Settings: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>,
+            Eye: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>,
+            EyeOff: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>,
+            Plus: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M5 12h14"/><path d="M12 5v14"/></svg>,
+            Camera: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></svg>,
+            Lock: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+            History: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>,
+            Calendar: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect width="18" height="18" x="3" y="4" rx="2" ry="2"/><line x1="16" x2="16" y1="2" y2="6"/><line x1="8" x2="8" y1="2" y2="6"/><line x1="3" x2="21" y1="10" y2="10"/></svg>,
+            Trash2: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" x2="10" y1="11" y2="17"/><line x1="14" x2="14" y1="11" y2="17"/></svg>,
+            Sparkles: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/><path d="M5 3v4"/><path d="M9 3v4"/><path d="M3 5h4"/><path d="M3 9h4"/></svg>,
+            Upload: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>,
+            Siren: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M7 12a5 5 0 0 1 5-5v0a5 5 0 0 1 5 5v6H7v-6Z"/><path d="M5 20a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2H5v-2Z"/><path d="M21 12h1"/><path d="M18.5 4.5 18 5"/><path d="M2 12h1"/><path d="M12 2v1"/><path d="m4.929 4.929.707.707"/><path d="M12 12v6"/></svg>,
+            Clipboard: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></svg>,
+            Shield: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg>,
+            Folder: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>,
+            X: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>,
+            Thermometer: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M14 4v10.54a4 4 0 1 1-4 0V4a2 2 0 0 1 4 0Z"/></svg>,
+            Brain: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/><path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/></svg>,
+            Pill: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="m10.5 20.5 10-10a4.95 4.95 0 1 0-7-7l-10 10a4.95 4.95 0 1 0 7 7Z"/><path d="m8.5 8.5 7 7"/></svg>,
+            FileImage: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><circle cx="10" cy="13" r="2"/><path d="m20 17-1.09-1.09a2 2 0 0 0-2.82 0L10 22"/></svg>,
+            MessageSquare: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
+            Send: ({size=24, className=""}) => <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        };
+
+        const ConfidenceBadge = ({ level }) => {
+            const config = {
+                High: { color: 'bg-green-100 text-green-800 border-green-200', icon: '🟢', label: 'High Confidence – Structured medical data' },
+                Medium: { color: 'bg-yellow-100 text-yellow-800 border-yellow-200', icon: '🟡', label: 'Needs Review – AI interpretation involved' },
+                Low: { color: 'bg-red-100 text-red-800 border-red-200', icon: '🔴', label: 'Advisory Only – Human verification required' }
+            };
+            const cfg = config[level] || config.Medium;
+            return (
+                <div className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold border w-fit mt-2 ${cfg.color}`}>
+                    <span className="text-xs">{cfg.icon}</span>
+                    <span>{cfg.label}</span>
+                </div>
+            );
+        };
+
+        /* ==========================================
+           COMPONENTS
+           ==========================================
+        */
+        const Card = ({ children, className = "" }) => (<div className={`bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden ${className}`}>{children}</div>);
+        const Button = ({ onClick, children, variant = "primary", className = "", disabled = false, icon }) => {
+            const baseStyle = "flex items-center justify-center px-4 py-3 rounded-lg font-medium transition-all active:scale-95 disabled:opacity-50 disabled:pointer-events-none";
+            const variants = { primary: "bg-blue-600 text-white hover:bg-blue-700 shadow-md shadow-blue-200", danger: "bg-red-600 text-white hover:bg-red-700 shadow-md shadow-red-200", outline: "border-2 border-slate-200 text-slate-700 hover:bg-slate-50", ghost: "text-slate-600 hover:bg-slate-100", secondary: "bg-slate-800 text-white hover:bg-slate-900", green: "bg-emerald-600 text-white hover:bg-emerald-700 shadow-md shadow-emerald-200" };
+            return (<button onClick={onClick} className={`${baseStyle} ${variants[variant]} ${className}`} disabled={disabled}>{icon}<span className={icon ? "ml-2" : ""}>{children}</span></button>);
+        };
+
+        const InputGroup = ({ label, value, onChange, placeholder, type = "text", textarea = false, select = false, options = [], min, disabled = false }) => (
+            <div className="mb-4">
+                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">{label}</label>
+                {textarea ? (
+                    <textarea value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400" rows={3} placeholder={placeholder} />
+                ) : select ? (
+                    <select value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all appearance-none disabled:bg-slate-100 disabled:text-slate-400">
+                        <option value="">{placeholder}</option>
+                        {options.map(opt => <option key={opt} value={opt}>{opt}</option>)}
+                    </select>
+                ) : (
+                    <input type={type} min={min} value={value} onChange={(e) => onChange(e.target.value)} disabled={disabled} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none transition-all disabled:bg-slate-100 disabled:text-slate-400" placeholder={placeholder} />
+                )}
+            </div>
+        );
+
+        // NEW: Health Chat Component
+        const HealthChat = ({ patientProfile }) => {
+            const [isOpen, setIsOpen] = React.useState(false);
+            const [messages, setMessages] = React.useState([{role: 'ai', text: "Hi! I'm your health assistant. How can I help you today?"}]);
+            const [input, setInput] = React.useState('');
+            const [loading, setLoading] = React.useState(false);
+            const scrollRef = React.useRef(null);
+
+            React.useEffect(() => {
+                if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+            }, [messages, isOpen]);
+
+            const handleSend = async () => {
+                if(!input.trim()) return;
+                const userMsg = {role: 'user', text: input};
+                setMessages(prev => [...prev, userMsg]);
+                setInput('');
+                setLoading(true);
+                
+                try {
+                    const response = await chatWithHealthBot(messages, patientProfile, input);
+                    setMessages(prev => [...prev, {role: 'ai', text: response}]);
+                } catch(e) {
+                    setMessages(prev => [...prev, {role: 'ai', text: "Sorry, I'm having trouble connecting right now."}]);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            if(!isOpen) return (
+                <button onClick={() => setIsOpen(true)} className="fixed bottom-24 right-4 bg-indigo-600 text-white p-4 rounded-full shadow-lg hover:bg-indigo-700 transition-all z-40 animate-bounce">
+                    <Icons.Sparkles size={24} />
+                </button>
+            );
+
+            return (
+                <div className="fixed bottom-24 right-4 w-80 bg-white rounded-xl shadow-2xl border border-indigo-100 z-40 flex flex-col overflow-hidden animate-in slide-in-from-bottom-10 fade-in h-96">
+                    <div className="bg-indigo-600 p-4 text-white flex justify-between items-center shrink-0">
+                        <h3 className="font-bold flex items-center gap-2"><Icons.Sparkles size={16}/> Health Assistant</h3>
+                        <button onClick={() => setIsOpen(false)}><Icons.X size={18}/></button>
+                    </div>
+                    <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 bg-slate-50 space-y-3">
+                        {messages.map((m, i) => (
+                            <div key={i} className={`p-2 rounded-lg text-sm max-w-[85%] ${m.role === 'user' ? 'bg-indigo-100 text-indigo-900 ml-auto' : 'bg-white text-slate-800 border border-slate-200 shadow-sm'}`}>
+                                {m.text}
+                            </div>
+                        ))}
+                        {loading && <div className="text-xs text-slate-400 italic ml-2">Thinking...</div>}
+                    </div>
+                    <div className="p-2 border-t flex gap-2 bg-white shrink-0">
+                        <input value={input} onChange={e => setInput(e.target.value)} onKeyPress={e => e.key === 'Enter' && handleSend()} className="flex-1 p-2 border rounded-lg text-sm focus:outline-none focus:border-indigo-500 bg-slate-50" placeholder="Ask a question..." />
+                        <button onClick={handleSend} disabled={loading} className="bg-indigo-600 text-white p-2 rounded-lg hover:bg-indigo-700 disabled:opacity-50"><Icons.Send size={16}/></button>
+                    </div>
+                </div>
+            );
+        };
+
+        const MedicalRecordView = ({ patientData, aiSummary, analyzing, triggerGemini, isDoctor = false, viewScope = 'full', onUpdateProfile, onUploadDocument }) => {
+            const [showSensitive, setShowSensitive] = React.useState(false);
+            const [activeTab, setActiveTab] = React.useState('summary'); 
+            const [summaryMode, setSummaryMode] = React.useState('clinical'); 
+            const [viewingDoc, setViewingDoc] = React.useState(null);
+            
+            // Med Tracker State
+            const [newMed, setNewMed] = React.useState({ name: '', dosage: '', stock: '', frequency: '' });
+            const [addingMed, setAddingMed] = React.useState(false);
+
+            // Hide sensitive info if in Emergency Scope
+            const isEmergencyScope = viewScope === 'emergency';
+
+            const MaskedText = ({ text, alwaysHideInEmergency = false }) => {
+                if (!text) return <span className="text-slate-400 italic">Not provided</span>;
+                if (isEmergencyScope && alwaysHideInEmergency) return <span className="font-mono text-slate-400">HIDDEN (ER MODE)</span>;
+                if (showSensitive || (isDoctor && !isEmergencyScope)) return <span>{decryptData(text)}</span>;
+                return <span className="font-mono text-slate-500">•••• •••• ••••</span>;
+            };
+
+            const handleGenerate = () => triggerGemini(summaryMode);
+
+            // Med Tracker Functions
+            const handleAddMed = () => {
+                if(!newMed.name || !newMed.stock) return;
+                const updatedMeds = [...(patientData.activeMedications || []), { ...newMed, id: crypto.randomUUID(), startDate: new Date().toISOString() }];
+                onUpdateProfile({ ...patientData, activeMedications: updatedMeds });
+                setNewMed({ name: '', dosage: '', stock: '', frequency: '' });
+                setAddingMed(false);
+            };
+
+            const handleTakeDose = (medId) => {
+                const updatedMeds = patientData.activeMedications.map(med => {
+                    if (med.id === medId && med.stock > 0) {
+                        return { ...med, stock: parseInt(med.stock) - 1 };
+                    }
+                    return med;
+                });
+                onUpdateProfile({ ...patientData, activeMedications: updatedMeds });
+            };
+
+            const handleDeleteMed = (medId) => {
+                if(!confirm("Stop tracking this medication?")) return;
+                const updatedMeds = patientData.activeMedications.filter(m => m.id !== medId);
+                onUpdateProfile({ ...patientData, activeMedications: updatedMeds });
+            };
+
+            return (
+                <div className="fade-in relative">
+                    <div className="bg-white rounded-t-xl p-6 border-b border-slate-100 flex justify-between items-start">
+                        <div className="flex items-center gap-4">
+                            {/* Profile Image Display */}
+                            {patientData.profileImage ? (
+                                <img 
+                                    src={patientData.profileImage} 
+                                    alt="Profile" 
+                                    className="w-16 h-16 rounded-full object-cover border-2 border-slate-100 shadow-sm"
+                                    onClick={() => setViewingDoc({ image: patientData.profileImage, tag: 'Profile Photo', date: new Date().toISOString() })} 
+                                />
+                            ) : (
+                                <div className="w-16 h-16 rounded-full bg-slate-100 text-slate-400 flex items-center justify-center border-2 border-slate-200">
+                                    <Icons.User size={32} />
+                                </div>
+                            )}
+                            <div>
+                                <h1 className="text-2xl font-bold text-slate-900 leading-none">{patientData.fullName}</h1>
+                                <div className="text-slate-500 text-sm mt-1">
+                                    Age: {patientData.age} • {patientData.gender} <br/> 
+                                    <span className="font-mono text-xs opacity-75">ID: #{patientData.raidId}</span>
+                                </div>
+                                {isEmergencyScope && <div className="mt-2 px-2 py-1 bg-red-100 text-red-700 text-xs font-bold inline-block rounded">EMERGENCY VIEW ONLY</div>}
+                            </div>
+                        </div>
+                        <div className="flex flex-col items-end">
+                            <span className="text-xs text-slate-400 uppercase font-bold">Blood Type</span>
+                            <span className="text-3xl font-black text-red-600">{patientData.bloodType}</span>
+                        </div>
+                    </div>
+
+                    <div className="flex border-b border-slate-200 bg-slate-50 overflow-x-auto">
+                        <button onClick={() => setActiveTab('summary')} className={`flex-1 min-w-[80px] py-3 text-sm font-bold ${activeTab === 'summary' ? 'text-blue-600 border-b-2 border-blue-600 bg-white' : 'text-slate-500'}`}>Status</button>
+                        <button onClick={() => setActiveTab('meds')} className={`flex-1 min-w-[80px] py-3 text-sm font-bold ${activeTab === 'meds' ? 'text-blue-600 border-b-2 border-blue-600 bg-white' : 'text-slate-500'}`}>Meds</button>
+                        <button onClick={() => setActiveTab('docs')} className={`flex-1 min-w-[80px] py-3 text-sm font-bold ${activeTab === 'docs' ? 'text-blue-600 border-b-2 border-blue-600 bg-white' : 'text-slate-500'}`}>Docs</button>
+                        <button onClick={() => setActiveTab('history')} className={`flex-1 min-w-[80px] py-3 text-sm font-bold ${activeTab === 'history' ? 'text-blue-600 border-b-2 border-blue-600 bg-white' : 'text-slate-500'}`} disabled={isEmergencyScope} style={{opacity: isEmergencyScope ? 0.5 : 1}}>History {isEmergencyScope && '🔒'}</button>
+                    </div>
+
+                    {activeTab === 'summary' && (
+                        <>
+                            {/* Only show AI Summary section to Doctors */}
+                            {isDoctor && (
+                                <div className="bg-indigo-50 p-6 border-x border-slate-200">
+                                    <div className="flex flex-col gap-4 mb-4">
+                                        <div className="flex justify-between items-center">
+                                            <h3 className="font-bold text-indigo-900 flex items-center gap-2"><Icons.Activity size={18}/> AI Clinical Summary</h3>
+                                        </div>
+                                        {!aiSummary ? (
+                                            <button onClick={handleGenerate} disabled={analyzing} className="text-xs bg-indigo-600 text-white px-3 py-1.5 rounded-full font-medium hover:bg-indigo-700 transition-colors flex items-center gap-1 w-fit">
+                                                {analyzing ? <Icons.Loader2 size={12} className="animate-spin" /> : "Generate Clinical Brief"}
+                                            </button>
+                                        ) : (
+                                            <div className="bg-white p-4 rounded-lg text-sm text-slate-800 leading-relaxed border border-indigo-100 shadow-sm whitespace-pre-wrap">
+                                                {aiSummary}
+                                                <ConfidenceBadge level="High" />
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="bg-white rounded-b-xl border border-t-0 border-slate-200 p-6 space-y-6">
+                                {/* Only show sensitive toggle to patients or when explicitly allowed (simplified for this demo) */}
+                                {!isDoctor && (
+                                    <div className="flex justify-end">
+                                         <button onClick={() => setShowSensitive(!showSensitive)} className="flex items-center gap-2 text-xs font-bold text-blue-600 hover:text-blue-800 transition-colors">
+                                            {showSensitive ? <><Icons.EyeOff size={14}/> Hide Sensitive Data</> : <><Icons.Eye size={14}/> Show Sensitive Data</>}
+                                        </button>
+                                    </div>
+                                )}
+
+                                {/* Organized Patient Info Grid */}
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    {/* Personal Details Card */}
+                                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
+                                        <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Patient Details</h4>
+                                        <div className="space-y-2 text-sm">
+                                            <div className="flex justify-between border-b border-slate-200 pb-1">
+                                                <span className="text-slate-500">Phone</span>
+                                                <span className="font-medium"><MaskedText text={patientData.phone} alwaysHideInEmergency={true} /></span>
+                                            </div>
+                                            {!isEmergencyScope && (
+                                                <div className="flex justify-between border-b border-slate-200 pb-1">
+                                                    <span className="text-slate-500">Address</span>
+                                                    <span className="font-medium text-right max-w-[60%] truncate">{patientData.address || 'N/A'}</span>
+                                                </div>
+                                            )}
+                                            <div className="flex justify-between">
+                                                <span className="text-slate-500">Gov ID</span>
+                                                <span className="font-medium"><MaskedText text={patientData.govId} alwaysHideInEmergency={true} /></span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {/* Emergency Card */}
+                                    <div className="bg-red-50 p-4 rounded-lg border border-red-100">
+                                        <h4 className="text-xs font-bold text-red-700 uppercase tracking-wider mb-3 flex items-center gap-1"><Icons.ShieldAlert size={14}/> Emergency Profile</h4>
+                                        <div className="space-y-2 text-sm">
+                                            <div>
+                                                <span className="text-[10px] text-red-500 uppercase font-bold">Allergies</span>
+                                                <div className="font-bold text-red-900">{patientData.allergies || "None Reported"}</div>
+                                            </div>
+                                            <div>
+                                                <span className="text-[10px] text-red-500 uppercase font-bold">Conditions</span>
+                                                <div className="font-medium text-red-900">{patientData.conditions || "None Reported"}</div>
+                                            </div>
+                                            <div className="pt-2 mt-1 border-t border-red-200">
+                                                <span className="text-[10px] text-red-500 uppercase font-bold">Contact</span>
+                                                <div className="font-medium text-red-900">{patientData.emergencyContactName} <span className="opacity-75">({patientData.emergencyContactRelation})</span></div>
+                                                <div className="text-red-900"><MaskedText text={patientData.emergencyContactPhone} /></div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </>
+                    )}
+
+                    {activeTab === 'meds' && (
+                        <div className="bg-white rounded-b-xl border border-t-0 border-slate-200 p-6 min-h-[300px]">
+                            <div className="flex justify-between items-center mb-4">
+                                <h3 className="font-bold text-slate-900 flex items-center gap-2"><Icons.Pill size={20} className="text-emerald-500"/> Medicine Tracker</h3>
+                                {!isDoctor && <button onClick={() => setAddingMed(!addingMed)} className="text-xs bg-emerald-50 text-emerald-700 px-3 py-1 rounded font-bold hover:bg-emerald-100">{addingMed ? "Cancel" : "+ Add Med"}</button>}
+                            </div>
+
+                            {!isDoctor && addingMed && (
+                                <div className="mb-6 p-4 bg-emerald-50 border border-emerald-100 rounded-lg animate-in fade-in slide-in-from-top-2">
+                                    <h4 className="text-xs font-bold text-emerald-800 uppercase mb-3">Add New Medication</h4>
+                                    <div className="grid grid-cols-2 gap-3 mb-3">
+                                        <input type="text" placeholder="Name (e.g. Paracetamol)" value={newMed.name} onChange={e => setNewMed({...newMed, name: e.target.value})} className="p-2 border rounded text-sm w-full"/>
+                                        <input type="text" placeholder="Dosage (e.g. 500mg)" value={newMed.dosage} onChange={e => setNewMed({...newMed, dosage: e.target.value})} className="p-2 border rounded text-sm w-full"/>
+                                        <input type="text" placeholder="Frequency (e.g. 2x Daily)" value={newMed.frequency} onChange={e => setNewMed({...newMed, frequency: e.target.value})} className="p-2 border rounded text-sm w-full"/>
+                                        <input type="number" placeholder="Current Stock (Qty)" value={newMed.stock} onChange={e => setNewMed({...newMed, stock: e.target.value})} className="p-2 border rounded text-sm w-full"/>
+                                    </div>
+                                    <Button onClick={handleAddMed} variant="green" className="w-full h-8 text-sm">Start Tracking</Button>
+                                </div>
+                            )}
+
+                            <div className="space-y-3">
+                                {patientData.activeMedications && patientData.activeMedications.length > 0 ? (
+                                    patientData.activeMedications.map(med => (
+                                        <div key={med.id} className="p-4 border border-slate-200 rounded-lg flex justify-between items-center hover:bg-slate-50 transition-colors">
+                                            <div>
+                                                <div className="font-bold text-slate-900 text-lg">{med.name} <span className="text-xs font-normal text-slate-500 bg-slate-100 px-2 py-0.5 rounded ml-2">{med.dosage}</span></div>
+                                                <div className="text-xs text-slate-500 mt-1">{med.frequency} • Started: {new Date(med.startDate).toLocaleDateString()}</div>
+                                                
+                                                {/* Stock Indicator */}
+                                                <div className="flex items-center gap-2 mt-3">
+                                                    <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Stock Level</div>
+                                                    <div className={`text-sm font-bold px-2 py-0.5 rounded ${parseInt(med.stock) <= 3 ? 'bg-red-100 text-red-600 animate-pulse' : 'bg-green-100 text-green-700'}`}>
+                                                        {med.stock} left
+                                                    </div>
+                                                    {parseInt(med.stock) <= 3 && <span className="text-[10px] text-red-500 font-bold">REFILL SOON</span>}
+                                                </div>
+                                            </div>
+
+                                            <div className="flex flex-col items-end gap-2">
+                                                {!isDoctor ? (
+                                                    <>
+                                                        <button onClick={() => handleTakeDose(med.id)} disabled={parseInt(med.stock) <= 0} className="bg-emerald-600 text-white px-4 py-2 rounded-lg font-bold text-sm hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm active:scale-95 transition-all">
+                                                            Take Dose
+                                                        </button>
+                                                        <button onClick={() => handleDeleteMed(med.id)} className="text-xs text-red-400 hover:text-red-600 mt-1">Stop Tracking</button>
+                                                    </>
+                                                ) : (
+                                                    <div className="text-right">
+                                                        <div className="text-xs font-bold text-slate-400 uppercase">Adherence</div>
+                                                        <div className="text-emerald-600 font-bold text-sm">Tracking Active</div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="text-center py-10 text-slate-400">
+                                        <Icons.Pill size={48} className="mx-auto mb-2 opacity-20"/>
+                                        <p>No active medications being tracked.</p>
+                                        {!isDoctor && <p className="text-xs mt-2">Click "+ Add Med" to start.</p>}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
+                    {activeTab === 'docs' && (
+                        <div className="bg-white rounded-b-xl border border-t-0 border-slate-200 p-6 min-h-[300px]">
+                            <div className="flex justify-between items-center mb-6">
+                                <h3 className="font-bold text-slate-900 flex items-center gap-2"><Icons.FileImage size={20} className="text-blue-500"/> Prescriptions & Reports</h3>
+                                <button onClick={onUploadDocument} className="text-xs bg-blue-600 text-white px-3 py-1.5 rounded-full font-bold hover:bg-blue-700 shadow-sm flex items-center gap-1">
+                                    <Icons.Upload size={14}/> Upload
+                                </button>
+                            </div>
+
+                            {patientData.documents && patientData.documents.length > 0 ? (
+                                <div className="grid grid-cols-2 gap-4">
+                                    {patientData.documents.slice().reverse().map((doc, i) => (
+                                        <div key={i} onClick={() => setViewingDoc(doc)} className="border border-slate-200 rounded-lg p-2 bg-slate-50 hover:bg-white transition-colors cursor-pointer group relative">
+                                            <div className="w-full h-32 bg-slate-200 rounded-md mb-2 overflow-hidden relative">
+                                                <img src={doc.image} alt={doc.tag} className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                                            </div>
+                                            <div className="font-bold text-xs text-slate-800 truncate">{doc.tag}</div>
+                                            <div className="text-[10px] text-slate-500">{new Date(doc.date).toLocaleDateString()}</div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-center py-12 text-slate-400">
+                                    <Icons.Folder size={48} className="mx-auto mb-3 opacity-20"/>
+                                    <p>No documents uploaded.</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {activeTab === 'history' && !isEmergencyScope && (
+                        <div className="bg-white rounded-b-xl border border-t-0 border-slate-200 p-6 min-h-[300px]">
+                            {patientData.visits && patientData.visits.length > 0 ? (
+                                <div className="space-y-4">
+                                    {patientData.visits.slice().reverse().map((visit, index) => (
+                                        <div key={index} className="p-4 border border-slate-200 rounded-lg hover:bg-slate-50 transition-colors">
+                                            <div className="flex justify-between items-start mb-2">
+                                                <div className="flex items-center gap-2">
+                                                    <div className="bg-blue-100 text-blue-600 p-2 rounded-lg"><Icons.Calendar size={16}/></div>
+                                                    <div>
+                                                        <div className="font-bold text-slate-900">{visit.period?.start ? new Date(visit.period.start).toLocaleDateString() : 'Unknown Date'}</div>
+                                                        <div className="text-xs text-slate-500">Dr. {visit.participant?.[0]?.individual?.display}</div>
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div className="pl-10 space-y-2">
+                                                <div>
+                                                    <span className="text-xs font-bold text-slate-400 uppercase">Diagnosis</span>
+                                                    <div className="text-sm text-slate-800 font-medium">
+                                                        {visit.reasonCode?.[0]?.coding?.[0]?.display} 
+                                                        <span className="text-xs text-slate-400 ml-1">({visit.reasonCode?.[0]?.coding?.[0]?.code})</span>
+                                                    </div>
+                                                </div>
+                                                
+                                                {visit.medications && visit.medications.length > 0 && (
+                                                    <div>
+                                                        <span className="text-xs font-bold text-slate-400 uppercase">Prescribed Meds</span>
+                                                        <div className="flex flex-wrap gap-2 mt-1">
+                                                            {visit.medications.map((m, i) => (
+                                                                <span key={i} className="text-xs bg-slate-100 border border-slate-200 px-2 py-1 rounded">
+                                                                    <b>{m.medicationCodeableConcept?.text}</b> {m.dosageInstruction?.[0]?.text} ({m.dosageInstruction?.[0]?.timing?.code})
+                                                                </span>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                )}
+
+                                                <div><span className="text-xs font-bold text-slate-400 uppercase">Notes</span><div className="text-sm text-slate-600">{visit.text?.div}</div></div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-center py-10 text-slate-400">
+                                    <Icons.History size={48} className="mx-auto mb-2 opacity-20"/>
+                                    <p>No visit history recorded yet.</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {viewingDoc && (
+                        <div className="fixed inset-0 bg-black/90 z-[60] flex items-center justify-center p-4 fade-in" onClick={() => setViewingDoc(null)}>
+                            <div className="relative max-w-4xl max-h-[90vh] w-full" onClick={e => e.stopPropagation()}>
+                                <button onClick={() => setViewingDoc(null)} className="absolute -top-10 right-0 text-white hover:text-slate-300 font-bold flex items-center gap-2"><Icons.X size={24}/> Close</button>
+                                <img src={viewingDoc.image} alt="Full View" className="w-full h-full object-contain rounded-lg" />
+                                <div className="absolute bottom-0 left-0 right-0 bg-black/50 text-white p-4 backdrop-blur-sm rounded-b-lg">
+                                    <div className="font-bold">{viewingDoc.tag}</div>
+                                    <div className="text-xs opacity-75">Uploaded on {new Date(viewingDoc.date).toLocaleDateString()} {viewingDoc.addedBy ? `by ${viewingDoc.addedBy}` : ''}</div>
+                                    <div className="mt-3 pt-2 border-t border-gray-600 text-[10px] text-gray-400 italic">
+                                        “Extracted data is generated using AI-based image analysis and may contain errors. Always verify against the original document before clinical use.”
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const LandingPage = ({ onSelectMode }) => (
+            <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center">
+                <div className="mb-8 relative"><div className="absolute inset-0 bg-blue-500 blur-2xl opacity-20 rounded-full animate-pulse"></div><div className="bg-white p-6 rounded-2xl shadow-xl relative z-10 border border-slate-100"><Icons.Activity size={48} className="text-blue-600" /></div></div>
+                <h1 className="text-4xl font-extrabold text-slate-900 mb-2">RAID Health Card</h1>
+                <p className="text-slate-500 mb-10 max-w-md">Rapid Access Identity for Digital Health. Secure medical history access for emergencies.</p>
+                <div className="space-y-4 w-full max-w-xs"><Button onClick={() => onSelectMode('patient')} variant="primary" className="w-full" icon={<Icons.User size={18}/>}>I am a Patient</Button><Button onClick={() => onSelectMode('doctor_auth')} variant="secondary" className="w-full" icon={<Icons.Stethoscope size={18}/>}>I am a Doctor</Button></div>
+                <div className="mt-12 flex gap-4 text-slate-300"><div className="flex items-center gap-1"><Icons.ShieldAlert size={16}/> Secure</div><div className="flex items-center gap-1"><Icons.Activity size={16}/> Fast</div><div className="flex items-center gap-1"><Icons.Heart size={16}/> Life Saving</div></div>
+            </div>
+        );
+
+        const PrescriptionScanner = ({ onClose, onAnalyze, onSave }) => {
+            const [image, setImage] = React.useState(null);
+            const [analysis, setAnalysis] = React.useState('');
+            const [loading, setLoading] = React.useState(false);
+            const [docType, setDocType] = React.useState('Prescription');
+
+            const handleImageUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    setLoading(true);
+                    compressImage(file).then(compressed => {
+                        setImage(compressed);
+                        setLoading(false);
+                    }).catch(err => {
+                        console.error("Compression failed", err);
+                        setLoading(false);
+                    });
+                }
+            };
+
+            const handleScan = async () => {
+                if (!image) return;
+                setLoading(true);
+                try {
+                    const result = await analyzePrescription(image);
+                    setAnalysis(result);
+                } catch(e) {
+                    console.error(e);
+                    alert("Analysis failed. Please try again.");
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleUse = () => {
+                onAnalyze(analysis);
+                onClose();
+            };
+
+            const handleSaveToProfile = () => {
+                if(onSave) {
+                    onSave({
+                        image,
+                        tag: docType,
+                        date: new Date().toISOString()
+                    });
+                    onClose();
+                }
+            };
+
+            return (
+                <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 fade-in z-[60]">
+                    <div className="bg-white rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+                        <div className="p-4 border-b flex justify-between items-center sticky top-0 bg-white z-10">
+                            <h3 className="font-bold flex items-center gap-2"><Icons.Camera size={20}/> Scan / Upload</h3>
+                            <button onClick={onClose} className="text-slate-400 hover:text-slate-600">✕</button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            {!image ? (
+                                <label htmlFor="cameraInput" className="block w-full aspect-video rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 transition-colors relative">
+                                    {loading ? (
+                                        <div className="flex flex-col items-center">
+                                            <Icons.Loader2 size={40} className="text-blue-500 animate-spin mb-2"/>
+                                            <span className="text-sm text-blue-500 font-medium">Processing Image...</span>
+                                        </div>
+                                    ) : (
+                                        <>
+                                            <Icons.Camera size={40} className="text-slate-300 mb-2"/>
+                                            <span className="text-sm text-slate-500 font-medium">Tap to Take Photo or Upload</span>
+                                        </>
+                                    )}
+                                    <input id="cameraInput" type="file" accept="image/*" onChange={handleImageUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                                </label>
+                            ) : (
+                                <div className="relative">
+                                    <img src={image} alt="Prescription" className="w-full rounded-lg" />
+                                    <button onClick={() => { setImage(null); setAnalysis(''); }} className="absolute top-2 right-2 bg-black/50 text-white p-1 rounded-full"><Icons.Trash2 size={16}/></button>
+                                </div>
+                            )}
+
+                            {image && (
+                                <div className="space-y-3">
+                                    <div className="flex gap-2">
+                                        <select value={docType} onChange={e => setDocType(e.target.value)} className="flex-1 p-2 border rounded text-sm bg-white">
+                                            <option>Prescription</option>
+                                            <option>Lab Report</option>
+                                            <option>X-Ray / Scan</option>
+                                            <option>Discharge Summary</option>
+                                            <option>Medical Photo</option>
+                                        </select>
+                                        {onSave && (
+                                            <Button onClick={handleSaveToProfile} className="flex-1 bg-green-600 hover:bg-green-700">
+                                                Save to Profile
+                                            </Button>
+                                        )}
+                                    </div>
+                                    <div className="text-center text-xs text-slate-400 border-t pt-3">OR</div>
+                                    <Button onClick={handleScan} disabled={loading} variant="secondary" className="w-full">
+                                        {loading ? <Icons.Loader2 className="animate-spin"/> : "Analyze Text with AI"}
+                                    </Button>
+                                </div>
+                            )}
+
+                            {analysis && (
+                                <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 text-sm leading-relaxed whitespace-pre-wrap">
+                                    <h4 className="font-bold text-blue-800 mb-2 flex items-center gap-2"><Icons.Sparkles size={14}/> AI Analysis</h4>
+                                    {analysis}
+                                    <div className="mt-3 pt-2 border-t border-blue-200 text-[10px] text-blue-600 italic">
+                                        “Extracted data is generated using AI-based image analysis and may contain errors. Always verify against the original document before clinical use.”
+                                    </div>
+                                    <ConfidenceBadge level="Medium" />
+                                    {onAnalyze && <Button onClick={handleUse} className="w-full mt-4 bg-blue-600 hover:bg-blue-700">Use This Data</Button>}
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const DoctorLogin = ({ onLogin, onBack }) => {
+            const [licenseId, setLicenseId] = React.useState('');
+            const [password, setPassword] = React.useState('');
+            const [name, setName] = React.useState('');
+            const [hospital, setHospital] = React.useState('');
+            const [role, setRole] = React.useState('Doctor');
+            const [step, setStep] = React.useState(1); 
+            const [error, setError] = React.useState('');
+            const [checking, setChecking] = React.useState(false);
+
+            const handleCheckId = async () => {
+                if (!licenseId) return;
+                setChecking(true);
+                setError('');
+                
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'doctors', licenseId);
+                    const docSnap = await getDoc(docRef);
+                    
+                    if (docSnap.exists()) {
+                        // User exists, ask for password
+                        setStep(3); // Go to password check
+                    } else {
+                        // User new, register
+                        setStep(2); 
+                    }
+                } catch(e) {
+                    console.error(e);
+                    setError("Connection Error");
+                } finally {
+                    setChecking(false);
+                }
+            };
+
+            const handleLoginWithPassword = async () => {
+                if(!password) { setError("Password Required"); return; }
+                setChecking(true);
+                try {
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'doctors', licenseId);
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        const hashedInput = await hashID(password); // Simple hash check
+                        if (data.passwordHash === hashedInput) {
+                            onLogin(data);
+                        } else {
+                            setError("Invalid Password");
+                        }
+                    }
+                } catch(e) {
+                    setError("Login Failed");
+                } finally {
+                    setChecking(false);
+                }
+            };
+
+            const handleRegister = async () => {
+                if(!name || !hospital || !password) { setError("All fields required"); return; }
+                setChecking(true);
+                try {
+                    const passwordHash = await hashID(password);
+                    const newProfile = {
+                        licenseId,
+                        name: "Dr. " + name,
+                        hospital,
+                        role,
+                        passwordHash,
+                        registeredAt: new Date().toISOString()
+                    };
+                    
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'doctors', licenseId), newProfile);
+                    onLogin(newProfile);
+                } catch(e) {
+                    console.error(e);
+                    setError("Registration failed: " + e.message);
+                } finally {
+                    setChecking(false);
+                }
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-900 flex items-center justify-center p-6">
+                    <div className="bg-white max-w-sm w-full rounded-xl p-8">
+                        <button onClick={onBack} className="mb-6 text-slate-400 hover:text-slate-600 flex items-center gap-1 text-sm"><Icons.ArrowLeft size={16}/> Back</button>
+                        <div className="text-center mb-6">
+                            <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-700"><Icons.Stethoscope size={32}/></div>
+                            <h2 className="text-2xl font-bold text-slate-900">Doctor Portal</h2>
+                            <p className="text-slate-500 text-sm">Verified Professionals Only</p>
+                        </div>
+                        
+                        {step === 1 && (
+                            <div className="space-y-4">
+                                <InputGroup label="Medical License ID" value={licenseId} onChange={setLicenseId} placeholder="e.g. MED-12345" />
+                                {error && <p className="text-red-500 text-xs">{error}</p>}
+                                <Button onClick={handleCheckId} className="w-full bg-slate-900 hover:bg-slate-800" disabled={checking}>
+                                    {checking ? <Icons.Loader2 className="animate-spin"/> : "Verify Identity"}
+                                </Button>
+                            </div>
+                        )}
+
+                        {step === 2 && (
+                            <div className="space-y-4 fade-in">
+                                <p className="text-sm text-green-600 font-bold bg-green-50 p-2 rounded text-center">ID Available. Register Profile.</p>
+                                <InputGroup label="Full Name" value={name} onChange={setName} placeholder="First Last" />
+                                <InputGroup label="Hospital / Clinic" value={hospital} onChange={setHospital} placeholder="e.g. City General" />
+                                <InputGroup label="Create Password" type="password" value={password} onChange={setPassword} placeholder="******" />
+                                <InputGroup label="Role" select options={['Doctor', 'Nurse', 'Admin']} value={role} onChange={setRole} placeholder="Select Role" />
+                                {error && <p className="text-red-500 text-xs">{error}</p>}
+                                <Button onClick={handleRegister} className="w-full bg-blue-600 hover:bg-blue-700" disabled={checking}>
+                                    {checking ? "Registering..." : "Complete Registration"}
+                                </Button>
+                            </div>
+                        )}
+
+                        {step === 3 && (
+                            <div className="space-y-4 fade-in">
+                                <p className="text-sm text-slate-600 font-bold text-center">Welcome back, ID: {licenseId}</p>
+                                <InputGroup label="Enter Password" type="password" value={password} onChange={setPassword} placeholder="******" />
+                                {error && <p className="text-red-500 text-xs">{error}</p>}
+                                <Button onClick={handleLoginWithPassword} className="w-full bg-slate-900 hover:bg-slate-800" disabled={checking}>
+                                    {checking ? "Verifying..." : "Login"}
+                                </Button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const PatientDashboard = ({ user, onLogout }) => {
+            const [loading, setLoading] = React.useState(true);
+            const [saving, setSaving] = React.useState(false);
+            const [profile, setProfile] = React.useState({
+                fullName: '', age: '', gender: '', bloodType: '', phone: '', email: '', address: '', govId: '',
+                allergies: '', conditions: '', medications: '', emergencyContactName: '', emergencyContactRelation: '', emergencyContactPhone: '',
+                raidId: null, visits: [], accessLogs: [], activeMedications: [], documents: [], privacyMode: false, accessPin: '', profileImage: ''
+            });
+            const [view, setView] = React.useState('card');
+            
+            // Features
+            const [insights, setInsights] = React.useState('');
+            const [loadingInsights, setLoadingInsights] = React.useState(false);
+            const [showScanner, setShowScanner] = React.useState(false);
+            const [scannedAnalysis, setScannedAnalysis] = React.useState('');
+            
+            // Symptom Checker State
+            const [showSymptoms, setShowSymptoms] = React.useState(false);
+            const [symptomInput, setSymptomInput] = React.useState('');
+            const [symptomResult, setSymptomResult] = React.useState('');
+            const [checkingSymptoms, setCheckingSymptoms] = React.useState(false);
+
+            // Login
+            const [showLogin, setShowLogin] = React.useState(false);
+            const [loginId, setLoginId] = React.useState('');
+
+            React.useEffect(() => {
+                if (!user) return;
+                const fetchProfile = async () => {
+                    const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'main');
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        // FIX: Decrypt data on load so we don't re-encrypt it on save
+                        setProfile(prev => ({ 
+                            ...prev, 
+                            ...data, 
+                            govId: decryptData(data.govId),
+                            phone: decryptData(data.phone),
+                            emergencyContactPhone: decryptData(data.emergencyContactPhone),
+                            visits: data.visits || [], 
+                            activeMedications: data.activeMedications || [],
+                            documents: data.documents || [],
+                            accessLogs: data.accessLogs || [],
+                            profileImage: data.profileImage || ''
+                        }));
+                    }
+                    setLoading(false);
+                };
+                fetchProfile();
+            }, [user]);
+            
+            // NEW: Handle Profile Image Upload
+            const handleProfileImageUpload = (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    // Compress to smaller size for profile pic (e.g., 200px width)
+                    compressImage(file, 200, 0.7).then(compressed => {
+                        handleUpdateProfile({ ...profile, profileImage: compressed });
+                    }).catch(err => console.error("Profile image error", err));
+                }
+            };
+
+            const handleUpdateProfile = async (updatedData) => {
+                try {
+                    // Update state immediately
+                    setProfile(updatedData);
+                    
+                    // Prepare data for encryption and saving
+                    const dataToSave = { 
+                        ...updatedData, 
+                        govId: encryptData(updatedData.govId),
+                        phone: encryptData(updatedData.phone),
+                        emergencyContactPhone: encryptData(updatedData.emergencyContactPhone)
+                    };
+                    
+                    // Save private data
+                    await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'main'), dataToSave);
+                    
+                    // Save public lookup data
+                    if (updatedData.raidId) {
+                        const hashedId = await hashID(updatedData.raidId);
+                        await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'registry', hashedId), {
+                            ...dataToSave, lastUpdated: new Date().toISOString()
+                        });
+                    }
+                } catch (err) {
+                    console.error("Update failed:", err);
+                    alert("Failed to save changes.");
+                }
+            };
+
+            const handleSave = async () => {
+                setSaving(true);
+                try {
+                    let currentRaidId = profile.raidId || Math.floor(100000 + Math.random() * 900000).toString();
+                    await handleUpdateProfile({ ...profile, raidId: currentRaidId });
+                    setView('card');
+                } finally { setSaving(false); }
+            };
+
+            const handleLogin = async () => {
+                if(!loginId) return;
+                setLoading(true);
+                try {
+                    const hashedId = await hashID(loginId);
+                    // Fetch from public registry based on hash
+                    // FIX: Correct Path
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'registry', hashedId);
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        // Decrypt before setting state
+                        setProfile(prev => ({ 
+                            ...prev, 
+                            ...data,
+                            govId: decryptData(data.govId),
+                            phone: decryptData(data.phone),
+                            emergencyContactPhone: decryptData(data.emergencyContactPhone)
+                        }));
+                        
+                        // Also sync to private user profile for this session (saving as encrypted)
+                        await setDoc(doc(db, 'artifacts', appId, 'users', user.uid, 'profile', 'main'), data);
+                        setShowLogin(false);
+                    } else {
+                        alert("RAID ID not found.");
+                    }
+                } catch(e) {
+                    console.error(e);
+                    alert("Error retrieving profile: " + e.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const getInsights = async () => {
+                setLoadingInsights(true);
+                const result = await generateHealthInsights(profile);
+                setInsights(result);
+                setLoadingInsights(false);
+            };
+
+            const handleCheckSymptoms = async () => {
+                if(!symptomInput) return;
+                setCheckingSymptoms(true);
+                try {
+                    const result = await checkSymptoms(profile, symptomInput);
+                    setSymptomResult(result);
+                } catch (e) {
+                    console.error("Symptom check failed", e);
+                    setSymptomResult("Error checking symptoms. Please try again.");
+                } finally {
+                    setCheckingSymptoms(false);
+                }
+            };
+
+            const handleScanResult = (text) => {
+                setScannedAnalysis(text);
+            };
+
+            const handleSaveDocument = (docData) => {
+                const updatedDocs = [...(profile.documents || []), docData];
+                handleUpdateProfile({ ...profile, documents: updatedDocs });
+            };
+
+            if (loading) return <div className="min-h-screen flex items-center justify-center"><Icons.Loader2 className="animate-spin text-blue-600" /></div>;
+
+            return (
+                <div className="min-h-screen bg-slate-50 pb-20">
+                    <header className="bg-white px-6 py-4 border-b flex justify-between items-center sticky top-0 z-20">
+                        <div className="flex items-center gap-3">
+                            <label className="relative cursor-pointer group">
+                                {profile.profileImage ? (
+                                    <div className="w-10 h-10 rounded-full border-2 border-blue-100 overflow-hidden relative">
+                                        <img src={profile.profileImage} className="w-full h-full object-cover" />
+                                        <div className="absolute inset-0 bg-black/20 hidden group-hover:flex items-center justify-center">
+                                            <Icons.Camera size={14} className="text-white"/>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center text-blue-600 hover:bg-blue-200 transition-colors border-2 border-blue-50">
+                                        <Icons.User size={20} />
+                                    </div>
+                                )}
+                                <input type="file" accept="image/*" className="hidden" onChange={handleProfileImageUpload} />
+                                {profile.raidId && <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-white rounded-full"></div>}
+                            </label>
+                            <div>
+                                <h2 className="font-bold text-lg text-slate-800 leading-tight">My RAID Card</h2>
+                                {profile.raidId && <div className="text-[10px] text-slate-500 font-mono tracking-wider">#{profile.raidId}</div>}
+                            </div>
+                        </div>
+                        <Button variant="ghost" onClick={onLogout} className="text-xs px-2 py-1">Logout</Button>
+                    </header>
+
+                    <main className="p-4 max-w-lg mx-auto">
+                        {showScanner && <PrescriptionScanner onClose={() => setShowScanner(false)} onAnalyze={handleScanResult} onSave={handleSaveDocument} />}
+                        
+                        {/* Symptom Checker Modal */}
+                        {showSymptoms && (
+                            <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 fade-in">
+                                <div className="bg-white rounded-xl w-full max-w-md max-h-[90vh] overflow-y-auto p-6">
+                                    <div className="flex justify-between items-center mb-4">
+                                        <h3 className="font-bold text-lg flex items-center gap-2"><Icons.Thermometer size={24} className="text-red-500"/> AI Symptom Checker</h3>
+                                        <button onClick={() => setShowSymptoms(false)}><Icons.X size={20}/></button>
+                                    </div>
+                                    <div className="space-y-4">
+                                        <p className="text-sm text-slate-500">Describe what you are feeling. I will check your medical profile for interactions.</p>
+                                        <textarea 
+                                            value={symptomInput} 
+                                            onChange={e => setSymptomInput(e.target.value)} 
+                                            className="w-full p-3 border rounded-lg h-24 focus:ring-2 focus:ring-red-200 outline-none" 
+                                            placeholder="e.g. I have a throbbing headache and I'm feeling dizzy..." 
+                                        />
+                                        <Button onClick={handleCheckSymptoms} disabled={checkingSymptoms || !symptomInput} className="w-full bg-red-600 hover:bg-red-700 shadow-red-200">
+                                            {checkingSymptoms ? <Icons.Loader2 className="animate-spin"/> : "✨ Analyze Symptoms"}
+                                        </Button>
+                                        
+                                        {symptomResult && (
+                                            <div className="bg-slate-50 border border-slate-200 p-4 rounded-lg mt-4 animate-in fade-in slide-in-from-top-2">
+                                                <div className="text-sm text-slate-800 whitespace-pre-wrap leading-relaxed">{symptomResult}</div>
+                                                <div className="mt-3 p-2 bg-yellow-50 border border-yellow-100 rounded text-[10px] text-yellow-800 italic">
+                                                    “AI-generated triage results are estimates based on available information. If symptoms are severe, worsening, or life-threatening, seek emergency medical care immediately.”
+                                                </div>
+                                                <ConfidenceBadge level="Medium" />
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {view === 'card' ? (
+                            <div className="space-y-6">
+                                {!profile.raidId ? (
+                                    <div className="text-center py-12 px-6 bg-white rounded-xl shadow-sm border border-slate-200">
+                                        <div className="w-16 h-16 bg-blue-50 text-blue-500 rounded-full flex items-center justify-center mx-auto mb-4"><Icons.FileText size={32} /></div>
+                                        <h3 className="text-xl font-bold text-slate-900 mb-2">No Profile Yet</h3>
+                                        
+                                        {!showLogin ? (
+                                            <div className="space-y-3">
+                                                <Button onClick={() => setView('edit')} className="w-full">Create New Profile</Button>
+                                                <button onClick={() => setShowLogin(true)} className="text-sm text-blue-600 hover:underline">Already have a card? Retrieve it</button>
+                                            </div>
+                                        ) : (
+                                            <div className="space-y-3 fade-in">
+                                                <InputGroup label="Enter Your RAID ID" value={loginId} onChange={setLoginId} placeholder="e.g. 123456" />
+                                                <Button onClick={handleLogin} className="w-full">Retrieve My Card</Button>
+                                                <button onClick={() => setShowLogin(false)} className="text-sm text-slate-400 hover:text-slate-600">Cancel</button>
+                                            </div>
+                                        )}
+                                    </div>
+                                ) : (
+                                    <>
+                                        <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+                                            <div className="bg-gradient-to-r from-blue-600 to-indigo-700 p-6 text-white relative">
+                                                <div className="absolute top-0 right-0 p-4 opacity-10"><Icons.Activity size={100} /></div>
+                                                <div className="relative z-10">
+                                                    <div className="text-xs font-semibold tracking-widest opacity-80 mb-1">RAID HEALTH CARD</div>
+                                                    <h1 className="text-3xl font-mono font-bold tracking-wider">{profile.raidId.match(/.{1,3}/g).join(' ')}</h1>
+                                                </div>
+                                            </div>
+                                            <div className="p-6">
+                                                <div className="flex justify-between items-start mb-6">
+                                                    <div>
+                                                        <h3 className="text-xl font-bold text-slate-900">{profile.fullName}</h3>
+                                                        <div className="text-slate-500 text-sm mt-1">Age: {profile.age} • {profile.gender} • <span className="text-red-600 font-bold bg-red-50 px-2 py-0.5 rounded">{profile.bloodType}</span></div>
+                                                    </div>
+                                                    <div className="bg-white p-2 rounded-lg border border-slate-100 shadow-sm"><img src={`https://api.qrserver.com/v1/create-qr-code/?size=100x100&data=RAID:${profile.raidId}`} alt="QR Code" className="w-20 h-20 mix-blend-multiply" /></div>
+                                                </div>
+                                                <Button onClick={() => setView('edit')} variant="outline" className="w-full text-sm py-2">Update Medical Data</Button>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <button onClick={() => setShowScanner(true)} className="col-span-1 bg-blue-600 text-white p-3 rounded-xl shadow-lg shadow-blue-200 flex flex-col items-center justify-center gap-1 font-bold hover:bg-blue-700 transition-all active:scale-95 text-sm">
+                                                <Icons.Upload size={20} /> 
+                                                <span>Scan/Upload</span>
+                                            </button>
+                                            <button onClick={() => setShowSymptoms(true)} className="col-span-1 bg-white text-red-600 border border-red-100 p-3 rounded-xl shadow-sm flex flex-col items-center justify-center gap-1 font-bold hover:bg-red-50 transition-all active:scale-95 text-sm">
+                                                <Icons.Thermometer size={20} /> 
+                                                <span>Check Symptoms</span>
+                                            </button>
+                                        </div>
+
+                                        {scannedAnalysis && (
+                                            <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 fade-in">
+                                                <div className="flex justify-between items-center mb-2">
+                                                    <h3 className="font-bold text-blue-900 flex items-center gap-2"><Icons.Sparkles size={16}/> AI Analysis Result</h3>
+                                                    <button onClick={() => setScannedAnalysis('')} className="text-xs text-blue-500 hover:text-blue-700">Close</button>
+                                                </div>
+                                                <div className="text-sm text-blue-800 leading-relaxed whitespace-pre-wrap">{scannedAnalysis}</div>
+                                                <ConfidenceBadge level="Medium" />
+                                            </div>
+                                        )}
+
+                                        <div className="bg-gradient-to-br from-purple-50 to-indigo-50 rounded-xl shadow-sm border border-purple-100 p-6">
+                                            <h3 className="text-lg font-bold text-purple-900 mb-2 flex items-center gap-2"><Icons.Sparkles size={20}/> AI Health Coach</h3>
+                                            {!insights ? (
+                                                <div className="text-center py-4">
+                                                    <p className="text-sm text-purple-700 mb-4">Get personalized lifestyle and dietary tips based on your profile.</p>
+                                                    <Button onClick={getInsights} disabled={loadingInsights} className="w-full bg-purple-600 hover:bg-purple-700 shadow-purple-200">
+                                                        {loadingInsights ? <Icons.Loader2 className="animate-spin"/> : "✨ Analyze My Health"}
+                                                    </Button>
+                                                </div>
+                                            ) : (
+                                                <div className="fade-in">
+                                                    <div className="bg-white/80 p-4 rounded-lg text-sm text-purple-900 leading-relaxed whitespace-pre-wrap border border-purple-100">
+                                                        {insights}
+                                                        <ConfidenceBadge level="High" />
+                                                    </div>
+                                                    <button onClick={() => setInsights('')} className="text-xs text-purple-500 mt-2 underline text-center w-full">Refresh / Close</button>
+                                                </div>
+                                            )}
+                                        </div>
+                                        
+                                        {/* Embedded Med Tracker View */}
+                                        <div className="mt-6">
+                                            <MedicalRecordView 
+                                                patientData={profile} 
+                                                onUpdateProfile={handleUpdateProfile} 
+                                                onUploadDocument={() => setShowScanner(true)}
+                                                isDoctor={false} 
+                                                // Added triggerGemini dummy for patient view to prevent crash
+                                                triggerGemini={async () => {}}
+                                            />
+                                        </div>
+                                    </>
+                                )}
+                            </div>
+                        ) : (
+                            <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                                <div className="flex items-center gap-2 mb-6"><button onClick={() => setView('card')} className="p-2 hover:bg-slate-100 rounded-full"><Icons.ArrowLeft size={20} className="text-slate-600" /></button><h3 className="text-xl font-bold text-slate-800">Edit Profile</h3></div>
+                                <div className="space-y-4">
+                                    <div className="bg-slate-50 p-4 rounded-lg border border-slate-200 mb-4">
+                                        <h4 className="text-sm font-bold text-slate-700 mb-3 flex items-center gap-2"><Icons.User size={16}/> Personal Details</h4>
+                                        <InputGroup label="Full Name" value={profile.fullName} onChange={v => setProfile({...profile, fullName: v})} placeholder="e.g. John Doe" />
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <InputGroup label="Age" type="number" min="0" value={profile.age} onChange={v => { if(v >= 0) setProfile({...profile, age: v}) }} placeholder="30" />
+                                            <InputGroup label="Gender" select options={['Male', 'Female', 'Other']} value={profile.gender} onChange={v => setProfile({...profile, gender: v})} placeholder="Select Gender" />
+                                        </div>
+                                        <InputGroup label="Blood Type" select options={['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-']} value={profile.bloodType} onChange={v => setProfile({...profile, bloodType: v})} placeholder="Select Blood Group" />
+                                        <InputGroup label="Phone Number" type="tel" value={profile.phone} onChange={v => setProfile({...profile, phone: v})} placeholder="e.g. +91 98765 43210" />
+                                        <InputGroup label="Address" textarea value={profile.address} onChange={v => setProfile({...profile, address: v})} placeholder="Full residential address" />
+                                        <InputGroup label="Aadhaar Number" value={profile.govId} onChange={v => setProfile({...profile, govId: v})} placeholder="XXXX-XXXX-XXXX" />
+                                    </div>
+                                    <div className="bg-red-50 p-4 rounded-lg border border-red-100 mb-4">
+                                        <h4 className="text-sm font-bold text-red-800 mb-3 flex items-center gap-2"><Icons.Activity size={16}/> Medical History</h4>
+                                        <InputGroup label="Known Allergies" value={profile.allergies} onChange={v => setProfile({...profile, allergies: v})} placeholder="e.g. Penicillin" />
+                                        <InputGroup label="Chronic Conditions" value={profile.conditions} onChange={v => setProfile({...profile, conditions: v})} placeholder="e.g. Diabetes" />
+                                    </div>
+                                    <div className="bg-green-50 p-4 rounded-lg border border-green-100 mb-4">
+                                        <h4 className="text-sm font-bold text-green-800 mb-3 flex items-center gap-2"><Icons.ShieldAlert size={16}/> Emergency Contact</h4>
+                                        <InputGroup label="Contact Name" value={profile.emergencyContactName} onChange={v => setProfile({...profile, emergencyContactName: v})} placeholder="e.g. Jane Doe" />
+                                        <InputGroup label="Phone Number" type="tel" value={profile.emergencyContactPhone} onChange={v => setProfile({...profile, emergencyContactPhone: v})} placeholder="e.g. +91 98765..." />
+                                    </div>
+                                    <div className="p-4 bg-slate-50 rounded-lg border border-slate-200">
+                                        <label className="flex items-center gap-2 mb-2 font-bold text-sm">
+                                            <input type="checkbox" checked={profile.privacyMode} onChange={e => setProfile({...profile, privacyMode: e.target.checked})} className="w-4 h-4 text-blue-600"/>
+                                            Consent Mode (Require PIN)
+                                        </label>
+                                        <InputGroup label="Set Access PIN" type="number" value={profile.accessPin} onChange={v => setProfile({...profile, accessPin: v})} placeholder="4-digit PIN" disabled={!profile.privacyMode} />
+                                    </div>
+
+                                    <Button onClick={handleSave} className="w-full" disabled={saving} icon={<Icons.Save size={18}/>}>{saving ? 'Saving...' : 'Save & Generate ID'}</Button>
+                                </div>
+                            </div>
+                        )}
+                    </main>
+                    <footer className="p-6 text-center text-[10px] text-slate-400 border-t mt-8">
+                        “This system uses artificial intelligence to assist with medical information summarization and decision support. AI outputs are informational only and are not a substitute for professional medical judgment, diagnosis, or treatment. All clinical decisions must be made by a qualified healthcare professional.”
+                    </footer>
+                </div>
+            );
+        };
+
+        const DoctorDashboard = ({ onBack, doctorProfile }) => {
+            const [searchId, setSearchId] = React.useState('');
+            const [patientData, setPatientData] = React.useState(null);
+            const [loading, setLoading] = React.useState(false);
+            const [aiSummary, setAiSummary] = React.useState('');
+            const [analyzing, setAnalyzing] = React.useState(false);
+            const [error, setError] = React.useState('');
+            const [accessPin, setAccessPin] = React.useState('');
+            const [awaitingPin, setAwaitingPin] = React.useState(false);
+            const [showAddVisit, setShowAddVisit] = React.useState(false);
+            const [visitDiagnosis, setVisitDiagnosis] = React.useState('');
+            const [visitNotes, setVisitNotes] = React.useState('');
+            const [savingVisit, setSavingVisit] = React.useState(false);
+            const [suggesting, setSuggesting] = React.useState(false);
+            const [showScanner, setShowScanner] = React.useState(false);
+            // NEW STATE FOR UI SUGGESTIONS
+            const [diagnosisSuggestions, setDiagnosisSuggestions] = React.useState('');
+
+            const handleSearch = async () => {
+                if (searchId.length < 6) return;
+                setLoading(true); setError(''); setAiSummary(''); setPatientData(null); setAwaitingPin(false);
+                try {
+                    const hashedId = await hashID(searchId);
+                    // FIX: Correct Path
+                    const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'registry', hashedId);
+                    const docSnap = await getDoc(docRef);
+                    if (docSnap.exists()) {
+                        const data = docSnap.data();
+                        setPatientData(data);
+                        if(data.privacyMode) setAwaitingPin(true);
+                    }
+                    else setError('Patient ID not found.');
+                } catch (err) { setError('System error accessing records.'); console.error(err); } 
+                finally { setLoading(false); }
+            };
+
+            const handlePinSubmit = () => {
+                if (patientData && patientData.accessPin === accessPin) {
+                    setAwaitingPin(false);
+                } else {
+                    alert("Incorrect Access PIN");
+                }
+            };
+
+            const triggerGemini = async (mode) => {
+                if (!patientData) return;
+                setAnalyzing(true);
+                try {
+                    const summary = await generateMedicalSummary(patientData, mode);
+                    setAiSummary(summary);
+                } catch(e) {
+                    console.error("Summary gen failed", e);
+                    setAiSummary("Could not generate summary.");
+                } finally {
+                    setAnalyzing(false);
+                }
+            };
+
+            const handleSuggestDiagnosis = async () => {
+                if (!visitNotes) { alert("Please enter clinical notes first."); return; }
+                setSuggesting(true);
+                try {
+                    const result = await suggestDifferentialDiagnosis(patientData, visitNotes);
+                    setDiagnosisSuggestions(result); // Set UI State instead of alert
+                } catch (e) {
+                    alert("AI Suggestion failed: " + e.message);
+                } finally {
+                    setSuggesting(false);
+                }
+            };
+
+            const handleUpdatePatientData = async (updatedData) => {
+                // For doctor, we update the public registry mostly, but also assume we have write access
+                // In a real app, this would be more restricted
+                try {
+                    const hashedId = await hashID(updatedData.raidId);
+                    await setDoc(doc(db, 'artifacts', appId, 'public', 'data', 'registry', hashedId), updatedData);
+                    setPatientData(updatedData);
+                } catch(e) {
+                    console.error("Failed to update patient data:", e);
+                    alert("Update failed. You may not have permission.");
+                }
+            };
+
+            const handleSaveDocument = (docData) => {
+                // Add author info
+                const docWithMeta = { ...docData, addedBy: `Dr. ${doctorProfile.name}` };
+                const updatedDocs = [...(patientData.documents || []), docWithMeta];
+                handleUpdatePatientData({ ...patientData, documents: updatedDocs });
+            };
+
+            // NEW: Generate Discharge Instructions
+            const handleDraftDischarge = async () => {
+                if (!visitDiagnosis || !visitNotes) { alert("Please fill Diagnosis and Notes first."); return; }
+                setAnalyzing(true);
+                try {
+                    const instructions = await generateDischargeInstructions(patientData, visitDiagnosis, visitNotes);
+                    // Append instructions to notes for review
+                    setVisitNotes(prev => prev + "\n\n--- DISCHARGE INSTRUCTIONS (AI Generated) ---\n" + instructions);
+                } catch(e) {
+                    alert("Failed to generate instructions.");
+                } finally {
+                    setAnalyzing(false);
+                }
+            };
+
+            const handleSaveVisit = async () => {
+                if(!visitDiagnosis) return;
+                setSavingVisit(true);
+                try {
+                    const newVisit = {
+                        period: { start: new Date().toISOString() },
+                        participant: [{ individual: { display: doctorProfile.name } }],
+                        reasonCode: [{ coding: [{ display: visitDiagnosis, code: "Manual" }] }],
+                        text: { div: visitNotes }
+                    };
+                    const updatedVisits = [...(patientData.visits || []), newVisit];
+                    const updatedData = { ...patientData, visits: updatedVisits };
+                    
+                    await handleUpdatePatientData(updatedData);
+                    setShowAddVisit(false);
+                    setVisitDiagnosis(''); setVisitNotes('');
+                } catch(e) { console.error(e); } finally { setSavingVisit(false); }
+            };
+
+            return (
+                <div className="min-h-screen bg-slate-100 pb-20">
+                    <header className="bg-slate-900 text-white px-6 py-4 border-b border-slate-800 sticky top-0 z-20 shadow-lg">
+                        <div className="flex justify-between items-center max-w-lg mx-auto">
+                            <div className="flex items-center gap-3"><button onClick={onBack} className="p-1 hover:bg-slate-700 rounded"><Icons.ArrowLeft size={20}/></button>
+                            <div>
+                                <h2 className="font-bold text-lg flex items-center gap-2"><Icons.Stethoscope size={18} className="text-green-400" /> {doctorProfile.role} Portal</h2>
+                                <div className="text-xs text-slate-400">{doctorProfile.name} • {doctorProfile.hospital}</div>
+                            </div>
+                            </div>
+                        </div>
+                    </header>
+                    <main className="p-4 max-w-lg mx-auto space-y-4">
+                        {showScanner && <PrescriptionScanner onClose={() => setShowScanner(false)} onSave={handleSaveDocument} onAnalyze={(txt) => setVisitNotes(prev => prev + '\n' + txt)} />}
+
+                        {!patientData && !awaitingPin && (
+                            <Card className="p-6">
+                                <label className="block text-sm font-medium text-slate-700 mb-2">Enter Patient RAID ID</label>
+                                <div className="flex gap-2">
+                                    <div className="relative flex-1"><div className="absolute left-3 top-3 text-slate-400"><Icons.Search size={18}/></div><input type="text" value={searchId} onChange={(e) => setSearchId(e.target.value.replace(/\D/g,'').slice(0,6))} className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-300 rounded-lg focus:ring-2 focus:ring-green-500 outline-none font-mono text-lg tracking-widest" placeholder="000 000" /></div>
+                                    <Button onClick={handleSearch} disabled={loading || searchId.length < 6} variant="secondary" className="bg-slate-800">{loading ? <Icons.Loader2 className="animate-spin"/> : 'Access'}</Button>
+                                </div>
+                                {error && <div className="mt-3 text-red-600 text-sm bg-red-50 p-2 rounded flex items-center gap-2"><Icons.X size={14}/> {error}</div>}
+                            </Card>
+                        )}
+
+                        {awaitingPin && (
+                            <Card className="p-6 text-center fade-in">
+                                <div className="w-12 h-12 bg-slate-100 rounded-full flex items-center justify-center mx-auto mb-4 text-slate-600"><Icons.Lock size={24}/></div>
+                                <h3 className="font-bold text-lg mb-2">Consent Required</h3>
+                                <p className="text-sm text-slate-500 mb-4">Patient has enabled Privacy Mode. Please ask for their Access PIN.</p>
+                                <div className="max-w-xs mx-auto flex gap-2">
+                                    <input type="password" maxLength="4" value={accessPin} onChange={e => setAccessPin(e.target.value)} className="w-full p-2 text-center text-2xl tracking-widest border rounded" placeholder="••••" />
+                                    <Button onClick={handlePinSubmit}>Unlock</Button>
+                                </div>
+                            </Card>
+                        )}
+                        
+                        {patientData && !awaitingPin && (
+                            <>
+                                <MedicalRecordView 
+                                    patientData={patientData} 
+                                    aiSummary={aiSummary} 
+                                    analyzing={analyzing} 
+                                    triggerGemini={triggerGemini} 
+                                    isDoctor={true}
+                                    onUpdateProfile={handleUpdatePatientData}
+                                    onUploadDocument={() => setShowScanner(true)}
+                                />
+                                <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+                                    <h3 className="font-bold text-slate-900 mb-4 flex items-center gap-2"><Icons.Plus size={20}/> New Visit Record</h3>
+                                    {!showAddVisit ? (
+                                        <Button onClick={() => setShowAddVisit(true)} className="w-full" variant="outline">Start Consultation</Button>
+                                    ) : (
+                                        <div className="space-y-4 fade-in">
+                                            <div className="bg-blue-50 p-3 rounded text-sm text-blue-800 font-medium">Dr. {doctorProfile.name} • {new Date().toLocaleDateString()}</div>
+                                            
+                                            <InputGroup label="Notes / Prescription / Observations" textarea value={visitNotes} onChange={setVisitNotes} placeholder="Patient complains of..." />
+                                            
+                                            <div className="flex gap-2">
+                                                <button onClick={handleDraftDischarge} className="text-xs bg-purple-100 text-purple-700 px-3 py-2 rounded-lg font-bold hover:bg-purple-200 flex items-center gap-1">
+                                                    <Icons.Sparkles size={14}/> Draft Instructions
+                                                </button>
+                                            </div>
+
+                                            <div className="relative">
+                                                <InputGroup label="Diagnosis" value={visitDiagnosis} onChange={setVisitDiagnosis} placeholder="e.g. Acute Bronchitis" />
+                                                <button 
+                                                    onClick={handleSuggestDiagnosis} 
+                                                    disabled={suggesting}
+                                                    className="absolute top-0 right-0 text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded font-bold hover:bg-purple-200 flex items-center gap-1"
+                                                >
+                                                    {suggesting ? <Icons.Loader2 size={10} className="animate-spin"/> : <><Icons.Brain size={12}/> AI Suggest</>}
+                                                </button>
+                                                {/* NEW: Diagnosis Suggestion UI */}
+                                                {diagnosisSuggestions && (
+                                                    <div className="absolute top-10 right-0 z-10 w-64 bg-white shadow-xl rounded-lg border border-purple-100 p-3 animate-in fade-in zoom-in-95">
+                                                        <div className="flex justify-between items-start mb-2">
+                                                            <h4 className="font-bold text-xs text-purple-900 uppercase">Differential Diagnosis</h4>
+                                                            <button onClick={() => setDiagnosisSuggestions('')}><Icons.X size={14}/></button>
+                                                        </div>
+                                                        <div className="text-sm text-slate-700 whitespace-pre-wrap">{diagnosisSuggestions}</div>
+                                                        <ConfidenceBadge level="Low" />
+                                                    </div>
+                                                )}
+                                            </div>
+
+                                            <div className="flex gap-2">
+                                                <Button onClick={() => setShowAddVisit(false)} variant="ghost" className="flex-1">Cancel</Button>
+                                                <Button onClick={handleSaveVisit} disabled={savingVisit} className="flex-1 bg-green-600 hover:bg-green-700">{savingVisit ? "Saving..." : "Sign & Save"}</Button>
+                                            </div>
+                                            <div className="mt-2 text-[10px] text-slate-400 italic text-center">
+                                                “AI suggestions are provided for clinical decision support only. Final diagnosis, prescriptions, and treatment plans remain the sole responsibility of the attending clinician.”
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </>
+                        )}
+                    </main>
+                    <footer className="p-6 text-center text-[10px] text-slate-400 border-t mt-8 bg-slate-50">
+                        “This system uses artificial intelligence to assist with medical information summarization and decision support. AI outputs are informational only and are not a substitute for professional medical judgment, diagnosis, or treatment. All clinical decisions must be made by a qualified healthcare professional.”
+                    </footer>
+                </div>
+            );
+        };
+
+        const App = () => {
+            const [user, setUser] = React.useState(null);
+            const [loading, setLoading] = React.useState(true);
+            const [mode, setMode] = React.useState('landing');
+            const [doctorProfile, setDoctorProfile] = React.useState(null);
+
+            React.useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (e) {
+                        console.error("Auth Failed", e);
+                    }
+                };
+                initAuth();
+                
+                return onAuthStateChanged(auth, u => { 
+                    if(u) { setUser(u); setLoading(false); } 
+                });
+            }, []);
+
+            if (loading) return <div className="min-h-screen flex items-center justify-center bg-slate-50"><Icons.Loader2 className="animate-spin text-blue-600 w-8 h-8"/></div>;
+
+            return (
+                <div>
+                    {mode === 'landing' && <LandingPage onSelectMode={setMode} />}
+                    {mode === 'doctor_auth' && <DoctorLogin onLogin={(profile) => { setDoctorProfile(profile); setMode('doctor'); }} onBack={() => setMode('landing')} />}
+                    {mode === 'patient' && (
+                        <>
+                            <PatientDashboard user={user} onLogout={() => setMode('landing')} />
+                            {/* Floating Health Chat for Patients */}
+                            <HealthChat patientProfile={{ age: 30, gender: 'Unknown', activeMedications: [] }} />
+                        </>
+                    )}
+                    {mode === 'doctor' && <DoctorDashboard doctorProfile={doctorProfile} onBack={() => setMode('landing')} />}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
