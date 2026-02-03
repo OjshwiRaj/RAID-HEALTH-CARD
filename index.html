@@ -4,10 +4,6 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RAID Health Card</title>
-
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
     
     <!-- PERFORMANCE: Pre-connect to critical CDNs -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -23,8 +19,7 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     
     <!-- Babel -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
+<script src="https://unpkg.com/@babel/standalone@7.24.0/babel.min.js"></script>
     <!-- Google Fonts -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
 
@@ -67,19 +62,21 @@
            CONFIGURATION & INIT
            ==========================================
         */
-        const firebaseConfig = {
-        apiKey: "AIzaSyDn5ogl4uzVx6zb1Q2cffnmN0WXBzikbQk",
-        authDomain: "raid-health-card.firebaseapp.com",
-        projectId: "raid-health-card",
-        storageBucket: "raid-health-card.firebasestorage.app",
-        messagingSenderId: "935067454733",
-        appId: "1:935067454733:web:f85d1b4b4136aee3a33444"
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {
+            apiKey: "AIzaSyDgqrH_lT1q1mCMlxNNjCWVDuQcSWNSCWU",
+            authDomain: "raid-health-card.firebaseapp.com",
+            projectId: "raid-health-card",
+            storageBucket: "raid-health-card.firebasestorage.app",
+            messagingSenderId: "935067454733",
+            appId: "1:935067454733:web:f85d1b4b4136aee3a33444",
+            measurementId: "G-4JHE37RLL5"
         };
-    
-        // Initialize Firebase using the global 'firebase' object
-        firebase.initializeApp(firebaseConfig);
-        const auth = firebase.auth();
-        const db = firebase.firestore();
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'raid-health-card';
+        const geminiApiKey = "AIzaSyBUA6V9v2tmw5rKhiQr4mxY63e_pgCCDlw"; 
 
         /* ==========================================
            SECURITY & ENCRYPTION UTILS
@@ -172,7 +169,7 @@
                 parts.push({ inlineData: { mimeType: "image/jpeg", data: cleanBase64 } });
             }
 
-            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${geminiApiKey}`;
+            const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`;
             const payload = { contents: [{ role: "user", parts: parts }] };
             const delays = [1000, 2000, 4000];
 
